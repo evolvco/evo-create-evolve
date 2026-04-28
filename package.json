@@ -1,0 +1,40 @@
+{
+  "name": "create-evolve",
+  "version": "0.2.1",
+  "description": "Public launcher for Evolv's authorized developer workspace scaffolder.",
+  "keywords": [
+    "evo",
+    "evolve",
+    "evolvco",
+    "scaffold",
+    "create",
+    "workspace"
+  ],
+  "homepage": "https://github.com/evolvco/evo-create-evolve#readme",
+  "bugs": {
+    "url": "https://github.com/evolvco/evo-create-evolve/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evolvco/evo-create-evolve.git"
+  },
+  "license": "UNLICENSED",
+  "author": "Evolvco",
+  "type": "module",
+  "bin": {
+    "create-evolve": "./bin/create-evolve.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node bin/create-evolve.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

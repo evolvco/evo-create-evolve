@@ -1,0 +1,49 @@
+name: Publish to npm
+
+# Publishes the version in package.json on every push to main.
+# If the version already exists on the registry, the job exits cleanly
+# (so non-version-bump pushes to main don't fail the build).
+#
+# To cut a release:
+#   npm version patch    (or minor / major)
+#   git push origin main --tags
+#
+# Requires an `NPM_TOKEN` repository secret holding an npm Automation token.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check if version is new
+        id: check
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VERSION}" version > /dev/null 2>&1; then
+            echo "Version ${PKG_VERSION} already on registry; skipping publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version ${PKG_VERSION} is new; will publish."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish
+        if: steps.check.outputs.publish == 'true'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
