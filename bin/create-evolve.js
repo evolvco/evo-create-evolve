@@ -35,6 +35,7 @@ const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
 async function main() {
+  console.log(`[create-evolve launcher v${PKG.version}]`);
   const { launcherArgs, forwardArgs } = splitArgs(process.argv.slice(2));
 
   if (launcherArgs.help) {
@@ -51,7 +52,7 @@ async function main() {
     authMode: launcherArgs.authMode,
     allowGh: launcherArgs.allowGh,
   });
-  console.log(`GitHub auth: ${source}`);
+  console.log(`[diag] auth source: ${source} | token prefix: ${token.slice(0, 4)}... | length: ${token.length}`);
 
   await ensureInternalImplementation(token, source);
   runInternal(forwardArgs, token);
@@ -366,8 +367,18 @@ function cloneWithToken(repo, destination, token, source) {
   }
 
   const askPassDir = writeAskPassScript(token);
+  const askPassLog = join(askPassDir, 'askpass.log');
+  const args = [
+    '-c', 'credential.helper=',
+    '-c', 'credential.useHttpPath=true',
+    'clone',
+    `https://github.com/${repo}.git`,
+    destination,
+  ];
+  console.log(`[diag] running: git ${args.join(' ')}`);
+
   try {
-    const result = spawnSync('git', ['clone', `https://github.com/${repo}.git`, destination], {
+    const result = spawnSync('git', args, {
       stdio: 'inherit',
       env: {
         ...process.env,
@@ -375,6 +386,8 @@ function cloneWithToken(repo, destination, token, source) {
         GIT_TERMINAL_PROMPT: '0',
       },
     });
+    console.log(`[diag] git exit code: ${result.status}`);
+    dumpAskPassLog(askPassLog);
     return result.status === 0;
   } finally {
     rmSync(askPassDir, { recursive: true, force: true });
@@ -394,19 +407,45 @@ function gitTokenEnv(token) {
   };
 }
 
+function dumpAskPassLog(logPath) {
+  if (!existsSync(logPath)) {
+    console.log('[diag] GIT_ASKPASS was never invoked by git (no log entries).');
+    console.log('[diag]   This usually means a credential helper short-circuited the prompt.');
+    return;
+  }
+  const log = readFileSync(logPath, 'utf8').trim();
+  console.log('[diag] GIT_ASKPASS invocations:');
+  for (const line of log.split('\n')) {
+    console.log(`[diag]   ${line}`);
+  }
+}
+
 function writeAskPassScript(token) {
   const askPassDir = mkdtempSync(join(tmpdir(), 'create-evolve-askpass-'));
   const askPassScript = join(askPassDir, 'askpass.sh');
+  const askPassLog = join(askPassDir, 'askpass.log');
   // git calls GIT_ASKPASS with prompts like "Username for 'https://...':" and
   // "Password for 'https://x-access-token@...':". GitHub App user-to-server
   // tokens (ghu_*) require the username to be the literal string
   // 'x-access-token'; using the token as both username and password yields
   // a misleading 404 on private repos. Branch on the prompt to send the
-  // right value.
+  // right value, and log every invocation so we can confirm git is
+  // actually using us instead of a credential helper.
   const escaped = escapeForShell(token);
+  const escapedLog = askPassLog.replace(/'/g, `'\\''`);
   writeFileSync(
     askPassScript,
-    `#!/bin/sh\ncase "$1" in\n  Username*) printf '%s' 'x-access-token' ;;\n  *) printf '%s' "${escaped}" ;;\nesac\n`,
+    [
+      '#!/bin/sh',
+      `prompt="$1"`,
+      `case "$prompt" in`,
+      `  Username*) reply="x-access-token"; replyKind="username='x-access-token'" ;;`,
+      `  *) reply="${escaped}"; replyKind="password=<token-len-${token.length}>" ;;`,
+      `esac`,
+      `printf '%s\\n' "prompt=$prompt -> $replyKind" >> '${escapedLog}'`,
+      `printf '%s' "$reply"`,
+      '',
+    ].join('\n'),
     { mode: 0o700 },
   );
   chmodSync(askPassScript, 0o700);
@@ -418,6 +457,7 @@ function escapeForShell(value) {
 }
 
 async function assertRepoVisible(token, repo) {
+  console.log(`[diag] probing GET https://api.github.com/repos/${repo} with Bearer token...`);
   let res;
   try {
     res = await fetch(`https://api.github.com/repos/${repo}`, {
@@ -432,6 +472,7 @@ async function assertRepoVisible(token, repo) {
     process.exit(1);
   }
 
+  console.log(`[diag] API probe HTTP ${res.status} (${res.statusText || ''})`);
   if (res.ok) return;
 
   if (res.status === 401) {
