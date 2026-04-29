@@ -336,9 +336,9 @@ async function promptForPat() {
 
 async function ensureInternalImplementation(token, source) {
   mkdirSync(CACHE_DIR, { recursive: true });
+  await assertRepoVisible(token, INTERNAL_REPO);
 
   if (!existsSync(INTERNAL_DIR)) {
-    await assertRepoVisible(token, INTERNAL_REPO);
     console.log('Fetching Evolv developer tooling...');
     if (!cloneWithToken(INTERNAL_REPO, INTERNAL_DIR, token, source)) {
       console.error('Unable to fetch Evolv developer tooling.');
@@ -348,15 +348,10 @@ async function ensureInternalImplementation(token, source) {
     return;
   }
 
-  const update = spawnSync('git', ['pull', '--ff-only', 'origin', INTERNAL_BRANCH], {
-    cwd: INTERNAL_DIR,
-    stdio: 'inherit',
-    env: { ...process.env, ...gitTokenEnv(token) },
-  });
-  if (update.status !== 0) {
+  if (!pullWithToken(INTERNAL_DIR, token)) {
     console.error(`Unable to update cached developer tooling at ${INTERNAL_DIR}.`);
-    console.error('Remove that directory and rerun this command if the cache is stale or corrupted.');
-    process.exit(update.status || 1);
+    console.error('Remove that directory (rm -rf ' + INTERNAL_DIR + ') and rerun this command if the cache is stale or corrupted.');
+    process.exit(1);
   }
 }
 
@@ -365,21 +360,31 @@ function cloneWithToken(repo, destination, token, source) {
     const result = spawnSync('gh', ['repo', 'clone', repo, destination], { stdio: 'inherit' });
     return result.status === 0;
   }
+  return runGitWithToken(token, [
+    'clone',
+    `https://github.com/${repo}.git`,
+    destination,
+  ]);
+}
 
+function pullWithToken(repoDir, token) {
+  return runGitWithToken(token, ['pull', '--ff-only', 'origin', INTERNAL_BRANCH], { cwd: repoDir });
+}
+
+function runGitWithToken(token, gitArgs, { cwd } = {}) {
   const askPassDir = writeAskPassScript(token);
   const askPassLog = join(askPassDir, 'askpass.log');
   const args = [
     '-c', 'credential.helper=',
     '-c', 'credential.useHttpPath=true',
-    'clone',
-    `https://github.com/${repo}.git`,
-    destination,
+    ...gitArgs,
   ];
-  console.log(`[diag] running: git ${args.join(' ')}`);
+  console.log(`[diag] running: git ${args.join(' ')}${cwd ? ` (cwd: ${cwd})` : ''}`);
 
   try {
     const result = spawnSync('git', args, {
       stdio: 'inherit',
+      cwd,
       env: {
         ...process.env,
         GIT_ASKPASS: join(askPassDir, 'askpass.sh'),
@@ -392,19 +397,6 @@ function cloneWithToken(repo, destination, token, source) {
   } finally {
     rmSync(askPassDir, { recursive: true, force: true });
   }
-}
-
-function gitTokenEnv(token) {
-  const askPassDir = writeAskPassScript(token);
-  process.on('exit', () => {
-    try {
-      rmSync(askPassDir, { recursive: true, force: true });
-    } catch {}
-  });
-  return {
-    GIT_ASKPASS: join(askPassDir, 'askpass.sh'),
-    GIT_TERMINAL_PROMPT: '0',
-  };
 }
 
 function dumpAskPassLog(logPath) {
