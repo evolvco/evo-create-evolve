@@ -36,7 +36,11 @@ const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
 async function main() {
   console.log(`[create-evolve launcher v${PKG.version}]`);
-  const { launcherArgs, forwardArgs } = splitArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  printLauncherArgTelemetry(rawArgs);
+  const { launcherArgs, forwardArgs } = splitArgs(rawArgs);
+  applyNpmModeFallback(forwardArgs);
+  console.log(`[diag] launcher forward argv: ${formatArgs(forwardArgs)}`);
 
   if (launcherArgs.help) {
     printUsage();
@@ -104,6 +108,31 @@ function splitArgs(args) {
   }
 
   return { launcherArgs, forwardArgs };
+}
+
+function applyNpmModeFallback(forwardArgs) {
+  const npmMode = process.env.npm_config_mode;
+  if (!npmMode || hasForwardedMode(forwardArgs)) return;
+  forwardArgs.push('--mode', npmMode);
+  console.log(`[diag] recovered --mode from npm_config_mode=${JSON.stringify(npmMode)}`);
+}
+
+function hasForwardedMode(args) {
+  return args.some((arg) => arg === '--mode' || arg.startsWith('--mode=') || arg === '--microapp' || arg === '--full-stack');
+}
+
+function printLauncherArgTelemetry(rawArgs) {
+  console.log(`[diag] launcher raw argv: ${formatArgs(rawArgs)}`);
+  console.log(`[diag] npm command: ${process.env.npm_command || '<unset>'}`);
+  console.log(`[diag] npm lifecycle event: ${process.env.npm_lifecycle_event || '<unset>'}`);
+  console.log(`[diag] npm_config_mode: ${process.env.npm_config_mode || '<unset>'}`);
+  if (process.env.npm_config_argv) {
+    console.log(`[diag] npm_config_argv: ${process.env.npm_config_argv}`);
+  }
+}
+
+function formatArgs(args) {
+  return JSON.stringify(args);
 }
 
 function normalizeAuthMode(mode) {
@@ -490,7 +519,11 @@ function runInternal(args, token) {
   const entry = join(INTERNAL_DIR, 'bin', 'create-evolve.js');
   const run = spawnSync(process.execPath, [entry, ...args], {
     stdio: 'inherit',
-    env: { ...process.env, GITHUB_TOKEN: token },
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: token,
+      CREATE_EVOLVE_LAUNCHER_FORWARD_ARGS: JSON.stringify(args),
+    },
   });
   process.exit(run.status || 0);
 }
