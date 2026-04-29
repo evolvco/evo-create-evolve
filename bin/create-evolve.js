@@ -53,7 +53,7 @@ async function main() {
   });
   console.log(`GitHub auth: ${source}`);
 
-  ensureInternalImplementation(token, source);
+  await ensureInternalImplementation(token, source);
   runInternal(forwardArgs, token);
 }
 
@@ -333,10 +333,11 @@ async function promptForPat() {
   return token;
 }
 
-function ensureInternalImplementation(token, source) {
+async function ensureInternalImplementation(token, source) {
   mkdirSync(CACHE_DIR, { recursive: true });
 
   if (!existsSync(INTERNAL_DIR)) {
+    await assertRepoVisible(token, INTERNAL_REPO);
     console.log('Fetching Evolv developer tooling...');
     if (!cloneWithToken(INTERNAL_REPO, INTERNAL_DIR, token, source)) {
       console.error('Unable to fetch Evolv developer tooling.');
@@ -364,22 +365,13 @@ function cloneWithToken(repo, destination, token, source) {
     return result.status === 0;
   }
 
-  const askPassDir = mkdtempSync(join(tmpdir(), 'create-evolve-askpass-'));
-  const askPassScript = join(askPassDir, 'askpass.sh');
-
-  writeFileSync(
-    askPassScript,
-    `#!/bin/sh\nprintf '%s' "${escapeForShell(token)}"\n`,
-    { mode: 0o700 },
-  );
-  chmodSync(askPassScript, 0o700);
-
+  const askPassDir = writeAskPassScript(token);
   try {
     const result = spawnSync('git', ['clone', `https://github.com/${repo}.git`, destination], {
       stdio: 'inherit',
       env: {
         ...process.env,
-        GIT_ASKPASS: askPassScript,
+        GIT_ASKPASS: join(askPassDir, 'askpass.sh'),
         GIT_TERMINAL_PROMPT: '0',
       },
     });
@@ -390,27 +382,75 @@ function cloneWithToken(repo, destination, token, source) {
 }
 
 function gitTokenEnv(token) {
-  // For `git pull` against an https remote, set up a one-shot askpass too so the
-  // pull works for users who don't have the gh credential helper configured.
-  const askPassDir = mkdtempSync(join(tmpdir(), 'create-evolve-askpass-'));
-  const askPassScript = join(askPassDir, 'askpass.sh');
-  writeFileSync(
-    askPassScript,
-    `#!/bin/sh\nprintf '%s' "${escapeForShell(token)}"\n`,
-    { mode: 0o700 },
-  );
-  chmodSync(askPassScript, 0o700);
-  // Best-effort cleanup; we lose this leak if Node exits before the spawn finishes.
+  const askPassDir = writeAskPassScript(token);
   process.on('exit', () => {
     try {
       rmSync(askPassDir, { recursive: true, force: true });
     } catch {}
   });
-  return { GIT_ASKPASS: askPassScript, GIT_TERMINAL_PROMPT: '0' };
+  return {
+    GIT_ASKPASS: join(askPassDir, 'askpass.sh'),
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
+function writeAskPassScript(token) {
+  const askPassDir = mkdtempSync(join(tmpdir(), 'create-evolve-askpass-'));
+  const askPassScript = join(askPassDir, 'askpass.sh');
+  // git calls GIT_ASKPASS with prompts like "Username for 'https://...':" and
+  // "Password for 'https://x-access-token@...':". GitHub App user-to-server
+  // tokens (ghu_*) require the username to be the literal string
+  // 'x-access-token'; using the token as both username and password yields
+  // a misleading 404 on private repos. Branch on the prompt to send the
+  // right value.
+  const escaped = escapeForShell(token);
+  writeFileSync(
+    askPassScript,
+    `#!/bin/sh\ncase "$1" in\n  Username*) printf '%s' 'x-access-token' ;;\n  *) printf '%s' "${escaped}" ;;\nesac\n`,
+    { mode: 0o700 },
+  );
+  chmodSync(askPassScript, 0o700);
+  return askPassDir;
 }
 
 function escapeForShell(value) {
   return value.replace(/(["\\$`])/g, '\\$1');
+}
+
+async function assertRepoVisible(token, repo) {
+  let res;
+  try {
+    res = await fetch(`https://api.github.com/repos/${repo}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'create-evolve-launcher',
+      },
+    });
+  } catch (err) {
+    console.error(`Could not reach the GitHub API to verify access to ${repo}: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (res.ok) return;
+
+  if (res.status === 401) {
+    console.error('Your GitHub token is invalid or expired. Re-run create-evolve to re-authorize.');
+    process.exit(1);
+  }
+  if (res.status === 403 || res.status === 404) {
+    console.error(`Your GitHub token cannot read ${repo}.`);
+    console.error('');
+    console.error('This usually means the create-evolve-cli GitHub App is not installed on the');
+    console.error('evolvco organization, or it is installed without access to this repo. Ask an');
+    console.error('evolvco admin to install or extend the App at:');
+    console.error('  https://github.com/apps/create-evolve-cli');
+    console.error('');
+    console.error('After installation, re-run `npm create evolve@latest`.');
+    process.exit(1);
+  }
+  console.error(`Unexpected response from GitHub API while checking ${repo}: HTTP ${res.status}`);
+  process.exit(1);
 }
 
 function runInternal(args, token) {
