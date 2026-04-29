@@ -36,11 +36,7 @@ const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
 async function main() {
   console.log(`[create-evolve launcher v${PKG.version}]`);
-  const rawArgs = process.argv.slice(2);
-  printLauncherArgTelemetry(rawArgs);
-  const { launcherArgs, forwardArgs } = splitArgs(rawArgs);
-  applyNpmModeFallback(forwardArgs);
-  console.log(`[diag] launcher forward argv: ${formatArgs(forwardArgs)}`);
+  const { launcherArgs, forwardArgs } = splitArgs(process.argv.slice(2));
 
   if (launcherArgs.help) {
     printUsage();
@@ -56,8 +52,6 @@ async function main() {
     authMode: launcherArgs.authMode,
     allowGh: launcherArgs.allowGh,
   });
-  console.log(`[diag] auth source: ${source} | token prefix: ${token.slice(0, 4)}... | length: ${token.length}`);
-
   await ensureInternalImplementation(token, source);
   runInternal(forwardArgs, token);
 }
@@ -108,31 +102,6 @@ function splitArgs(args) {
   }
 
   return { launcherArgs, forwardArgs };
-}
-
-function applyNpmModeFallback(forwardArgs) {
-  const npmMode = process.env.npm_config_mode;
-  if (!npmMode || hasForwardedMode(forwardArgs)) return;
-  forwardArgs.push('--mode', npmMode);
-  console.log(`[diag] recovered --mode from npm_config_mode=${JSON.stringify(npmMode)}`);
-}
-
-function hasForwardedMode(args) {
-  return args.some((arg) => arg === '--mode' || arg.startsWith('--mode=') || arg === '--microapp' || arg === '--full-stack');
-}
-
-function printLauncherArgTelemetry(rawArgs) {
-  console.log(`[diag] launcher raw argv: ${formatArgs(rawArgs)}`);
-  console.log(`[diag] npm command: ${process.env.npm_command || '<unset>'}`);
-  console.log(`[diag] npm lifecycle event: ${process.env.npm_lifecycle_event || '<unset>'}`);
-  console.log(`[diag] npm_config_mode: ${process.env.npm_config_mode || '<unset>'}`);
-  if (process.env.npm_config_argv) {
-    console.log(`[diag] npm_config_argv: ${process.env.npm_config_argv}`);
-  }
-}
-
-function formatArgs(args) {
-  return JSON.stringify(args);
 }
 
 function normalizeAuthMode(mode) {
@@ -402,13 +371,11 @@ function pullWithToken(repoDir, token) {
 
 function runGitWithToken(token, gitArgs, { cwd } = {}) {
   const askPassDir = writeAskPassScript(token);
-  const askPassLog = join(askPassDir, 'askpass.log');
   const args = [
     '-c', 'credential.helper=',
     '-c', 'credential.useHttpPath=true',
     ...gitArgs,
   ];
-  console.log(`[diag] running: git ${args.join(' ')}${cwd ? ` (cwd: ${cwd})` : ''}`);
 
   try {
     const result = spawnSync('git', args, {
@@ -420,50 +387,30 @@ function runGitWithToken(token, gitArgs, { cwd } = {}) {
         GIT_TERMINAL_PROMPT: '0',
       },
     });
-    console.log(`[diag] git exit code: ${result.status}`);
-    dumpAskPassLog(askPassLog);
     return result.status === 0;
   } finally {
     rmSync(askPassDir, { recursive: true, force: true });
   }
 }
 
-function dumpAskPassLog(logPath) {
-  if (!existsSync(logPath)) {
-    console.log('[diag] GIT_ASKPASS was never invoked by git (no log entries).');
-    console.log('[diag]   This usually means a credential helper short-circuited the prompt.');
-    return;
-  }
-  const log = readFileSync(logPath, 'utf8').trim();
-  console.log('[diag] GIT_ASKPASS invocations:');
-  for (const line of log.split('\n')) {
-    console.log(`[diag]   ${line}`);
-  }
-}
-
 function writeAskPassScript(token) {
   const askPassDir = mkdtempSync(join(tmpdir(), 'create-evolve-askpass-'));
   const askPassScript = join(askPassDir, 'askpass.sh');
-  const askPassLog = join(askPassDir, 'askpass.log');
   // git calls GIT_ASKPASS with prompts like "Username for 'https://...':" and
   // "Password for 'https://x-access-token@...':". GitHub App user-to-server
   // tokens (ghu_*) require the username to be the literal string
   // 'x-access-token'; using the token as both username and password yields
-  // a misleading 404 on private repos. Branch on the prompt to send the
-  // right value, and log every invocation so we can confirm git is
-  // actually using us instead of a credential helper.
+  // a misleading 404 on private repos.
   const escaped = escapeForShell(token);
-  const escapedLog = askPassLog.replace(/'/g, `'\\''`);
   writeFileSync(
     askPassScript,
     [
       '#!/bin/sh',
       `prompt="$1"`,
       `case "$prompt" in`,
-      `  Username*) reply="x-access-token"; replyKind="username='x-access-token'" ;;`,
-      `  *) reply="${escaped}"; replyKind="password=<token-len-${token.length}>" ;;`,
+      `  Username*) reply="x-access-token" ;;`,
+      `  *) reply="${escaped}" ;;`,
       `esac`,
-      `printf '%s\\n' "prompt=$prompt -> $replyKind" >> '${escapedLog}'`,
       `printf '%s' "$reply"`,
       '',
     ].join('\n'),
@@ -478,7 +425,6 @@ function escapeForShell(value) {
 }
 
 async function assertRepoVisible(token, repo) {
-  console.log(`[diag] probing GET https://api.github.com/repos/${repo} with Bearer token...`);
   let res;
   try {
     res = await fetch(`https://api.github.com/repos/${repo}`, {
@@ -493,7 +439,6 @@ async function assertRepoVisible(token, repo) {
     process.exit(1);
   }
 
-  console.log(`[diag] API probe HTTP ${res.status} (${res.statusText || ''})`);
   if (res.ok) return;
 
   if (res.status === 401) {
@@ -519,11 +464,7 @@ function runInternal(args, token) {
   const entry = join(INTERNAL_DIR, 'bin', 'create-evolve.js');
   const run = spawnSync(process.execPath, [entry, ...args], {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      GITHUB_TOKEN: token,
-      CREATE_EVOLVE_LAUNCHER_FORWARD_ARGS: JSON.stringify(args),
-    },
+    env: { ...process.env, GITHUB_TOKEN: token },
   });
   process.exit(run.status || 0);
 }
