@@ -231,11 +231,22 @@ async function deviceFlowLogin() {
 
   console.log('');
   console.log('Sign in to GitHub to authorize create-evolve:');
-  console.log(`  1. Open ${verification_uri}`);
-  console.log(`  2. Enter the code: ${user_code}`);
   console.log('');
-  console.log('Waiting for authorization (this window stays open)...');
+  console.log(`  Code: ${user_code}`);
+  console.log(`  URL:  ${verification_uri}`);
+  console.log('');
+
+  if (process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      await rl.question('  Copy the code above, then press Enter to open the browser...');
+    } finally {
+      rl.close();
+    }
+  }
+
   tryOpenBrowser(verification_uri);
+  console.log('Waiting for authorization (this window stays open)...');
 
   const expiresAt = Date.now() + expires_in * 1000;
   let pollInterval = Math.max(interval, 1);
