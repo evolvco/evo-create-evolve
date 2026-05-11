@@ -2,15 +2,11 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
-  writeFileSync,
 } from 'node:fs';
-import { homedir, platform, tmpdir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +32,15 @@ const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
 async function main() {
   console.log(`[create-evolve launcher v${PKG.version}]`);
+
+  if (process.platform === 'win32') {
+    console.warn('');
+    console.warn('Warning: create-evolve is not supported on native Windows (PowerShell / cmd.exe).');
+    console.warn('Run this command from your WSL2 shell instead:');
+    console.warn('  https://learn.microsoft.com/en-us/windows/wsl/install');
+    console.warn('');
+  }
+
   const { launcherArgs, forwardArgs } = splitArgs(process.argv.slice(2));
 
   if (launcherArgs.help) {
@@ -381,58 +386,17 @@ function pullWithToken(repoDir, token) {
 }
 
 function runGitWithToken(token, gitArgs, { cwd } = {}) {
-  const askPassDir = writeAskPassScript(token);
   const args = [
     '-c', 'credential.helper=',
-    '-c', 'credential.useHttpPath=true',
+    '-c', `http.extraHeader=Authorization: Bearer ${token}`,
     ...gitArgs,
   ];
-
-  try {
-    const result = spawnSync('git', args, {
-      stdio: 'inherit',
-      cwd,
-      env: {
-        ...process.env,
-        GIT_ASKPASS: join(askPassDir, 'askpass.sh'),
-        GIT_TERMINAL_PROMPT: '0',
-      },
-    });
-    return result.status === 0;
-  } finally {
-    rmSync(askPassDir, { recursive: true, force: true });
-  }
-}
-
-function writeAskPassScript(token) {
-  const askPassDir = mkdtempSync(join(tmpdir(), 'create-evolve-askpass-'));
-  const askPassScript = join(askPassDir, 'askpass.sh');
-  // git calls GIT_ASKPASS with prompts like "Username for 'https://...':" and
-  // "Password for 'https://x-access-token@...':". GitHub App user-to-server
-  // tokens (ghu_*) require the username to be the literal string
-  // 'x-access-token'; using the token as both username and password yields
-  // a misleading 404 on private repos.
-  const escaped = escapeForShell(token);
-  writeFileSync(
-    askPassScript,
-    [
-      '#!/bin/sh',
-      `prompt="$1"`,
-      `case "$prompt" in`,
-      `  Username*) reply="x-access-token" ;;`,
-      `  *) reply="${escaped}" ;;`,
-      `esac`,
-      `printf '%s' "$reply"`,
-      '',
-    ].join('\n'),
-    { mode: 0o700 },
-  );
-  chmodSync(askPassScript, 0o700);
-  return askPassDir;
-}
-
-function escapeForShell(value) {
-  return value.replace(/(["\\$`])/g, '\\$1');
+  const result = spawnSync('git', args, {
+    stdio: 'inherit',
+    cwd,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+  return result.status === 0;
 }
 
 async function assertRepoVisible(token, repo) {
