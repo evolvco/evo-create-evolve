@@ -34,12 +34,25 @@ async function main() {
   console.log(`[create-evolve launcher v${PKG.version}]`);
 
   if (process.platform === 'win32') {
+    guideWindowsUser();
+    process.exit(1);
+  }
+
+  if (process.env.WSL_DISTRO_NAME && process.execPath.startsWith('/mnt/')) {
     console.error('');
-    console.error('create-evolve does not support native Windows (PowerShell / cmd.exe).');
-    console.error('Run this command from your WSL2 shell instead.');
+    console.error(`Windows Node.js is running inside WSL2 (${process.execPath}).`);
+    console.error('This causes native module build failures and Docker path issues.');
     console.error('');
-    console.error('Install WSL2: https://learn.microsoft.com/en-us/windows/wsl/install');
-    console.error('Then re-run from the WSL2 terminal.');
+    console.error('Fix: install nvm inside WSL2 and use its Node. In Ubuntu:');
+    console.error('');
+    console.error('  export NVM_DIR="$HOME/.nvm"');
+    console.error('  git clone https://github.com/nvm-sh/nvm.git "$NVM_DIR"');
+    console.error(
+      '  (cd "$NVM_DIR" && git checkout "$(git describe --abbrev=0 --tags --match \'v[0-9]*\')")',
+    );
+    console.error('  echo \'[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\' >> ~/.bashrc');
+    console.error('  echo \'[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\' >> ~/.profile');
+    console.error('  source ~/.bashrc && nvm install --lts');
     console.error('');
     process.exit(1);
   }
@@ -445,6 +458,154 @@ function runInternal(args, token) {
     env: { ...process.env, GITHUB_TOKEN: token },
   });
   process.exit(run.status || 0);
+}
+
+function decodeWslUtf16(buf) {
+  // WSL list commands output UTF-16LE. Strip the BOM (0xFF 0xFE) when present.
+  const start = buf[0] === 0xff && buf[1] === 0xfe ? 2 : 0;
+  return buf.slice(start).toString('utf16le');
+}
+
+function detectDefaultDistro() {
+  // Primary: parse `wsl -l -v` for the * (default) marker.
+  const lv = spawnSync('wsl', ['-l', '-v'], { encoding: 'buffer', timeout: 5000 });
+  if (!lv.error && lv.status === 0 && lv.stdout && lv.stdout.length > 0) {
+    const text = decodeWslUtf16(lv.stdout);
+    for (const raw of text.split('\n')) {
+      const line = raw.replace(/\r/g, '').trim();
+      if (line.startsWith('*')) {
+        const name = line.slice(1).trim().split(/\s+/)[0];
+        if (name) return name;
+      }
+    }
+  }
+  // Fallback: first non-empty name from --list --quiet (default distro is listed first).
+  const lq = spawnSync('wsl', ['--list', '--quiet'], { encoding: 'buffer', timeout: 5000 });
+  if (!lq.error && lq.status === 0 && lq.stdout && lq.stdout.length > 0) {
+    const text = decodeWslUtf16(lq.stdout);
+    const name = text
+      .split('\n')
+      .map((l) => l.replace(/\r/g, '').replace(/\0/g, '').trim())
+      .find((l) => l.length > 0 && l !== '﻿');
+    if (name) return name;
+  }
+  return null;
+}
+
+function guideWindowsUser() {
+  console.log('');
+  console.log('create-evolve does not support native Windows (PowerShell / cmd.exe).');
+  console.log('Checking your WSL2 setup...');
+  console.log('');
+
+  // Step 1 — Is WSL installed?
+  const wslCheck = spawnSync('wsl', ['--list', '--quiet'], {
+    encoding: 'buffer',
+    timeout: 5000,
+  });
+
+  if (wslCheck.error || wslCheck.status !== 0) {
+    console.error('WSL2 is not installed on this machine.');
+    console.error('');
+    console.error('Install it by running in PowerShell (as Administrator):');
+    console.error('  wsl --install');
+    console.error('');
+    console.error('After installation, restart your machine, open Ubuntu from the Windows');
+    console.error('Start Menu, and run:');
+    console.error('  npm create evolve@latest');
+    return;
+  }
+
+  // Step 2 — Which distro is the default?
+  const distro = detectDefaultDistro();
+
+  if (!distro) {
+    console.error('WSL2 is installed but no default distro is configured.');
+    console.error('');
+    console.error('Set up Ubuntu by running in PowerShell:');
+    console.error('  wsl --install -d Ubuntu');
+    console.error('');
+    console.error('Then open Ubuntu from the Windows Start Menu and run:');
+    console.error('  npm create evolve@latest');
+    return;
+  }
+
+  console.log(`WSL2 distro: ${distro}`);
+
+  // Step 3 — npm/node Windows PATH leak check.
+  // Must use -ic (interactive) — Ubuntu .bashrc has an early-return guard for
+  // non-interactive shells that skips nvm init, so -lc misses nvm entirely.
+  const npmCheck = spawnSync('wsl', ['-d', distro, '--', 'bash', '-ic', 'which npm 2>/dev/null'], {
+    encoding: 'utf8',
+    timeout: 8000,
+  });
+  const npmPath = (npmCheck.stdout || '').trim();
+  const npmIsLeaked = npmPath.startsWith('/mnt/');
+
+  // Step 4 — Claude Code in WSL?
+  const claudeCheck = spawnSync(
+    'wsl',
+    ['-d', distro, '--', 'bash', '-ic', 'which claude 2>/dev/null'],
+    { encoding: 'utf8', timeout: 8000 },
+  );
+  const claudePath = (claudeCheck.stdout || '').trim();
+  const claudeMissing = !claudePath || claudePath.startsWith('/mnt/');
+
+  console.log('');
+
+  if (npmIsLeaked) {
+    console.error('Problem: Windows npm is leaking into WSL2 PATH.');
+    console.error(`  which npm → ${npmPath}  (this is the Windows version, not WSL)`);
+    console.error('');
+    console.error('Fix: Install nvm inside WSL2. Open Ubuntu and run:');
+    console.error('');
+    console.error('  export NVM_DIR="$HOME/.nvm"');
+    console.error('  git clone https://github.com/nvm-sh/nvm.git "$NVM_DIR"');
+    console.error(
+      '  (cd "$NVM_DIR" && git checkout "$(git describe --abbrev=0 --tags --match \'v[0-9]*\')")',
+    );
+    console.error('');
+    console.error('  # Add to BOTH ~/.bashrc AND ~/.profile (required for interactive');
+    console.error('  # and login shells — .bashrc alone is not enough):');
+    console.error('  echo \'[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\' >> ~/.bashrc');
+    console.error('  echo \'[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\' >> ~/.profile');
+    console.error('');
+    console.error('  source ~/.bashrc');
+    console.error('  nvm install --lts');
+    console.error('');
+  }
+
+  if (claudeMissing) {
+    console.error('Problem: Claude Code is not installed inside WSL2.');
+    console.error('');
+    console.error('Fix: After installing nvm and Node above, run in Ubuntu:');
+    console.error('  npm install -g @anthropic-ai/claude-code');
+    console.error('');
+  }
+
+  // Step 5 — Browser bridge advisory.
+  // explorer.exe splits OAuth URLs on & and opens multiple windows.
+  // The correct fix is a wslview wrapper using powershell.exe Start-Process.
+  console.log('Note: If the GitHub auth browser does not open automatically, set up');
+  console.log('a WSL browser bridge. In Ubuntu:');
+  console.log('');
+  console.log("  sudo tee /usr/local/bin/wslview << 'EOF'");
+  console.log('#!/bin/sh');
+  console.log('powershell.exe -NoProfile -Command "Start-Process \'$1\'"');
+  console.log('EOF');
+  console.log('  sudo chmod +x /usr/local/bin/wslview');
+  console.log('  echo \'export BROWSER=wslview\' >> ~/.bashrc');
+  console.log('  echo \'export BROWSER=wslview\' >> ~/.profile');
+  console.log('');
+  console.log('  If no browser opens during auth, copy the URL from the terminal —');
+  console.log('  the flow completes either way.');
+  console.log('');
+
+  // Step 6 — Final instruction. Do NOT attempt to re-launch via wsl -- npm ... :
+  // the nvm non-interactive shell problem means npm may resolve to Windows npm
+  // inside WSL even after the user installs nvm, producing a silent wrong-env launch.
+  console.error('Open Ubuntu from the Windows Start Menu and run:');
+  console.error('  npm create evolve@latest');
 }
 
 main().catch((err) => {
