@@ -34,11 +34,14 @@ async function main() {
   console.log(`[create-evolve launcher v${PKG.version}]`);
 
   if (process.platform === 'win32') {
-    console.warn('');
-    console.warn('Warning: create-evolve is not supported on native Windows (PowerShell / cmd.exe).');
-    console.warn('Run this command from your WSL2 shell instead:');
-    console.warn('  https://learn.microsoft.com/en-us/windows/wsl/install');
-    console.warn('');
+    console.error('');
+    console.error('create-evolve does not support native Windows (PowerShell / cmd.exe).');
+    console.error('Run this command from your WSL2 shell instead.');
+    console.error('');
+    console.error('Install WSL2: https://learn.microsoft.com/en-us/windows/wsl/install');
+    console.error('Then re-run from the WSL2 terminal.');
+    console.error('');
+    process.exit(1);
   }
 
   const { launcherArgs, forwardArgs } = splitArgs(process.argv.slice(2));
