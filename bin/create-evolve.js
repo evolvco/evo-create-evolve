@@ -388,7 +388,7 @@ function pullWithToken(repoDir, token) {
 function runGitWithToken(token, gitArgs, { cwd } = {}) {
   const args = [
     '-c', 'credential.helper=',
-    '-c', `http.extraHeader=Authorization: Bearer ${token}`,
+    '-c', `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`,
     ...gitArgs,
   ];
   const result = spawnSync('git', args, {
