@@ -452,7 +452,19 @@ async function assertRepoVisible(token, repo) {
 }
 
 function runInternal(args, token) {
-  const entry = join(INTERNAL_DIR, 'bin', 'create-evolve.js');
+  // The internal repo became a monorepo; the scaffolder bin moved under
+  // packages/scaffolder. Keep the old root path as a fallback for pinned
+  // pre-monorepo checkouts.
+  const candidates = [
+    join(INTERNAL_DIR, 'packages', 'scaffolder', 'bin', 'create-evolve.js'),
+    join(INTERNAL_DIR, 'bin', 'create-evolve.js'),
+  ];
+  const entry = candidates.find((p) => existsSync(p));
+  if (!entry) {
+    console.error(`Could not find the scaffolder entry point in ${INTERNAL_DIR}.`);
+    console.error('Remove that directory (rm -rf ' + INTERNAL_DIR + ') and rerun this command.');
+    process.exit(1);
+  }
   const run = spawnSync(process.execPath, [entry, ...args], {
     stdio: 'inherit',
     env: { ...process.env, GITHUB_TOKEN: token },
