@@ -1,27 +1,8 @@
-# create-evolve
+# create-evolve — repository archived
 
-Public launcher for Evolv's authorized developer workspace scaffolder.
+This repository previously hosted the `create-evolve` launcher and published it to npm through **v0.4.5**. As of **v0.5.0** the launcher ships from Evolv's internal monorepo; this repository is archived and will not receive further changes.
 
-## Usage
+- Package: https://www.npmjs.com/package/create-evolve
+- Usage: `npm create evolve` (requires authorized GitHub access)
 
-```bash
-npm create evolve@latest my-app
-```
-
-This package is intentionally small. It checks that GitHub authentication is available, fetches Evolv's private implementation for authorized users, and forwards the command arguments to that implementation.
-
-## Requirements
-
-- Node `>= 18`
-- GitHub CLI (`gh`)
-- A GitHub account with access to Evolv's private developer tooling
-
-If your account is not authorized, the launcher exits without downloading the private implementation.
-
-## Source
-
-https://github.com/evolvco/evo-create-evolve
-
-## License
-
-UNLICENSED.
+Releases up to 0.4.5 carry npm provenance attesting to this repository; it remains public and archived so those attestations keep resolving.
